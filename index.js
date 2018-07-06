@@ -6,7 +6,7 @@ const figlet = require('figlet');
 const opn = require('opn');
 const Spinner = require('cli-spinner').Spinner;
 
-const { askSteamCredentials, askSteamAuthCode, askSteamCaptcha, askAutoConfirm, askSteamIdentitySecret, askWhichInventory, askTradeLink, askTradeHold } = require('./lib/inquirer');
+const { askSteamCredentials, askSteamAuthCode, askSteamCaptcha, askAutoConfirm, askSteamIdentitySecret, askWhichInventory, askTradeLink, askTradeAmount } = require('./lib/inquirer');
 const { logon } = require('./lib/logon');
 const { getInventory, sendTrade } = require('./lib/inventory');
 
@@ -65,6 +65,8 @@ const run = async(credentials, auth, captcha) => {
 
   const { tradeLink } = await askTradeLink();
 
+  const { tradeAmount } = await askTradeAmount();
+
   const { appid, contextid } = await askWhichInventory();
 
   // Bring up spinner and load inventory
@@ -79,32 +81,31 @@ const run = async(credentials, auth, captcha) => {
   if (inventory === 'ERROR')
     return process.exit(error('Something went wrong while loading your inventory.'));
 
-  const tradeSpinner = new Spinner(`Transferring ${inventory.length} items. (${appid}-${contextid})`);
-  tradeSpinner.setSpinnerDelay(75).start();
-  const trade = await sendTrade(manager, tradeLink, inventory, ...(autoConfirm ? [community, identitySecret] : []));
-  tradeSpinner.stop();
+  info(`Transferring ${inventory.length} items. (${appid}-${contextid})`);
+  const itemsPerTrade = Math.ceil(inventory.length / tradeAmount);
+  while (inventory.length) {
+    const trade = await sendTrade(manager, tradeLink, inventory.splice(0, itemsPerTrade), ...(autoConfirm ? [community, identitySecret] : []));
 
-  title();
+    // Handle errors
+    if (trade === 'ERROR')
+      return process.exit(error('Something went wrong while getting ESCROW status. Make sure that your receiving inventory is public.'));
 
-  // Couldn't get user details
-  if (trade === 'ERROR')
-    return process.exit(error('Something went wrong while getting ESCROW status. Make sure that your receiving inventory is public'));
+    if (trade === 'PROBATION')
+      return process.exit(error('The account you want to transfer your items to has been trade banned.'));
 
-  if (trade === 'PROBATION')
-    return process.exit(error('The account you want to transfer your items to has been trade banned.'));
+    if (trade === 'ESCROW')
+      return process.exit(error('This trade would result in a trade hold.'));
 
-  if (trade === 'ESCROW')
-    return process.exit(error('This trade would result in a trade hold.'));
+    if (trade === 'TRADEERROR')
+      error('Something went wrong while sending your trade.');
 
-  if (trade === 'TRADEERROR')
-    return process.exit(error('Something went wrong while sending your trade'));
+    if (trade === 'CONFIRMATIONERROR')
+      error('Could not confirm trade.');
 
-  if (trade === 'CONFIRMATIONERROR')
-    return process.exit(info('Your trade has been sent, but an error occurred while confirming it!'));
+    info(`Trade ${tradeAmount - Math.floor(inventory.length / itemsPerTrade)}/${tradeAmount} sent.`);
+  }
 
-  info('Your trade has been sent!');
-  await opn(`https://www.steamcommunity.com/tradeoffer/${trade}`);
-
+  good('All your trades have been sent! :)');
   process.exit();
 };
 
